@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from voice_eval import (
+from voice_agent_eval import (
+    AgentResponseReview,
     Segment,
     TranscriptEvaluation,
     build_report,
@@ -77,10 +78,22 @@ def test_transcript_evaluation_and_report(
         overall_assessment="review",
         task_completion_score=80,
         task_completion_reason="The next step was not confirmed.",
+        response_alignment_score=4,
         coherence_score=5,
         relevance_score=4,
         context_retention_score=4,
         repetition_score=5,
+        response_reviews=[
+            AgentResponseReview(
+                customer_timestamp_seconds=0.0,
+                agent_timestamp_seconds=1.5,
+                customer_request="The customer asked for help.",
+                agent_response="The agent offered help.",
+                outcome="partially_answered",
+                score=4,
+                note="The agent responded, but the next step was not confirmed.",
+            )
+        ],
         required_fact_coverage_score=None,
         missing_or_incorrect_facts=[],
         factuality_status="not_checked",
@@ -109,6 +122,12 @@ def test_transcript_evaluation_and_report(
     )
 
     assert result.agent_speaker == "speaker_1"
+    assert report["schema_version"] == "0.1"
+    assert report["scope"]["evaluated_party"] == "agent"
     assert report["assessment"] == "review"
     assert report["task"]["score"] == 80
+    assert report["agent_response"]["alignment_score"] == 4
+    assert report["agent_response"]["turn_reviews"][0]["outcome"] == "partially_answered"
+    assert report["transcript"][0]["role"] == "customer"
+    assert report["transcript"][1]["role"] == "agent"
     assert report["facts"]["status"] == "not_checked"

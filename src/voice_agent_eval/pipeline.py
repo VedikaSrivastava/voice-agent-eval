@@ -1,67 +1,21 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+import os
+import tempfile
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Sequence
 
 import librosa
 import numpy as np
-from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 from pydub import AudioSegment
 
+from .models import EvaluationConfig, Segment, TranscriptEvaluation
+
 MAX_AUDIO_BYTES = 25_000_000
-
-
-@dataclass(frozen=True)
-class Segment:
-    speaker: str
-    start: float
-    end: float
-    text: str
-
-    @property
-    def duration(self) -> float:
-        return max(0.0, self.end - self.start)
-
-
-class ReviewIssue(BaseModel):
-    category: Literal[
-        "task_completion",
-        "missing_fact",
-        "factuality",
-        "repetition",
-        "context",
-        "coherence",
-        "compliance",
-        "other",
-    ]
-    severity: Literal["low", "medium", "high"]
-    timestamp_seconds: float | None = None
-    evidence: str
-    explanation: str
-
-
-class TranscriptEvaluation(BaseModel):
-    agent_speaker: str
-    agent_speaker_confidence: float = Field(ge=0, le=1)
-    overall_assessment: Literal["pass", "review", "fail"]
-    task_completion_score: int = Field(ge=0, le=100)
-    task_completion_reason: str
-    coherence_score: int = Field(ge=1, le=5)
-    relevance_score: int = Field(ge=1, le=5)
-    context_retention_score: int = Field(ge=1, le=5)
-    repetition_score: int = Field(
-        ge=1,
-        le=5,
-        description="5 means no unnecessary repetition; 1 means severe looping or repeated questions.",
-    )
-    required_fact_coverage_score: int | None = Field(default=None, ge=0, le=100)
-    missing_or_incorrect_facts: list[str]
-    factuality_status: Literal["not_checked", "supported", "mixed", "problematic"]
-    factuality_note: str
-    summary: str
-    issues: list[ReviewIssue]
+ProgressCallback = Callable[[str], None]
 
 
 def _plain(value: Any) -> Any:
@@ -74,19 +28,55 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def transcribe_with_speakers(audio_path: Path, api_key: str) -> list[Segment]:
-    """Transcribe an uploaded recording and keep speaker/timestamp information."""
+def _notify(callback: ProgressCallback | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
+
+
+def normalize_reference_facts(reference_facts: str | Sequence[str] | None) -> str:
+    if reference_facts is None:
+        return ""
+    if isinstance(reference_facts, str):
+        return reference_facts.strip()
+    return "\n".join(str(item).strip() for item in reference_facts if str(item).strip())
+
+
+def resolve_api_key(
+    api_key: str | None = None,
+    env_file: str | Path | None = ".env.local",
+) -> str:
+    if api_key and api_key.strip():
+        return api_key.strip()
+
+    if env_file is not None:
+        load_dotenv(dotenv_path=Path(env_file), override=False)
+
+    resolved = os.getenv("OPENAI_API_KEY", "").strip()
+    if not resolved:
+        raise ValueError(
+            "OPENAI_API_KEY is not configured. Create .env.local in the project root "
+            "and add OPENAI_API_KEY=your-key."
+        )
+    return resolved
+
+
+def transcribe_with_speakers(
+    audio_path: Path,
+    api_key: str,
+    model: str = "gpt-4o-transcribe-diarize",
+) -> list[Segment]:
+    """Transcribe a recording while retaining speaker labels and timestamps."""
     if not audio_path.is_file():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
     if audio_path.stat().st_size > MAX_AUDIO_BYTES:
-        raise ValueError("The demo accepts audio files up to 25 MB.")
+        raise ValueError("The evaluator accepts audio files up to 25 MB.")
 
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, timeout=30 * 60)
     with audio_path.open("rb") as audio_file:
         response = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe-diarize",
+            model=model,
             file=audio_file,
             response_format="diarized_json",
             chunking_strategy="auto",
@@ -126,7 +116,7 @@ def format_timestamp(seconds: float | None) -> str:
 
 def transcript_for_model(segments: list[Segment]) -> str:
     return "\n".join(
-        f"{segment.speaker} | {format_timestamp(segment.start)}-{format_timestamp(segment.end)} | {segment.text}"
+        f"{segment.speaker} | start={segment.start:.2f}s | end={segment.end:.2f}s | {segment.text}"
         for segment in segments
     )
 
@@ -135,26 +125,41 @@ def evaluate_transcript(
     segments: list[Segment],
     api_key: str,
     task: str,
-    reference_facts: str,
+    reference_facts: str | Sequence[str] | None,
     model: str = "gpt-5-mini",
 ) -> TranscriptEvaluation:
     speakers = sorted({segment.speaker for segment in segments})
     transcript = transcript_for_model(segments)
+    facts = normalize_reference_facts(reference_facts)
 
     system_prompt = """
-You are reviewing a completed two-person call between a customer and a voice agent.
-Use only the transcript and the optional reference information supplied below.
+You are evaluating the voice agent in a completed two-person customer call.
+The customer is not being scored. Customer turns are context for understanding what was asked,
+what information was supplied, and whether the agent responded appropriately.
 
 First identify which diarized speaker is the agent. Do not assume speaker_0 is the agent.
-Score the call plainly and conservatively. Every issue must point to evidence in the transcript.
+Then evaluate only the agent's behavior. Score plainly and conservatively, and ground every issue
+in the transcript.
+
+For each substantive customer question, request, correction, or concern, compare it with the next
+relevant agent response. Add a response review showing what the customer asked, what the agent
+said, whether it answered the request, and a short reason. Use the segment start times from the
+transcript for customer_timestamp_seconds and agent_timestamp_seconds. Keep the request and response
+faithful to the transcript and do not invent missing content. Skip greetings and acknowledgements unless
+they reveal an agent failure. Do not penalize the customer for being unclear, frustrated, uncooperative,
+accented, or informal. If customer behavior prevents completion, explain that as context without
+scoring the customer.
 
 Rules:
-- Task completion measures whether the stated goal was achieved. If no goal is supplied, infer only the basic goal visible in the call and say that you inferred it.
+- Task completion measures the agent's contribution to the stated call goal.
+- Response alignment measures whether the agent answers the customer's actual request or correction.
+- Relevance, coherence, context retention, and repetition apply only to agent responses.
 - Required-fact coverage checks whether supplied facts or required talking points were correctly covered.
-- If no reference facts are supplied, set factuality_status to not_checked, required_fact_coverage_score to null, and do not claim that business facts were correct.
-- A high factuality or compliance issue should normally make the overall assessment review or fail.
-- Do not judge the acoustic quality, latency, pitch, emotion, or speaking style. Those are calculated separately from the audio.
-- Keep the summary short and useful to an engineer reviewing the call.
+- If no reference facts are supplied, set factuality_status to not_checked,
+  required_fact_coverage_score to null, and do not claim that business facts were correct.
+- A material factuality or compliance issue should normally make the overall assessment review or fail.
+- Do not judge acoustic quality, latency, pitch, emotion, or speaking style. Those are calculated separately.
+- Keep the summary short and useful to an engineer reviewing the agent.
 """.strip()
 
     user_prompt = f"""
@@ -164,7 +169,7 @@ Call goal:
 {task.strip() or "Not provided"}
 
 Reference facts or required talking points:
-{reference_facts.strip() or "Not provided"}
+{facts or "Not provided"}
 
 Speaker-attributed transcript:
 {transcript}
@@ -223,6 +228,7 @@ def calculate_interaction_metrics(
     long_pause_seconds: float = 2.0,
     minimum_overlap_seconds: float = 0.15,
 ) -> dict[str, Any]:
+    """Measure how the agent responds to customer turns using diarized timestamps."""
     turns = merge_adjacent_segments(segments)
     response_gaps: list[float] = []
     interruptions: list[dict[str, Any]] = []
@@ -269,7 +275,10 @@ def calculate_interaction_metrics(
         "agent_turn_count": len(agent_turns),
         "customer_turn_count": len(customer_turns),
         "agent_speech_share": round(agent_speech / all_speech, 3) if all_speech else None,
-        "note": "Response time and interruption metrics are estimated from diarized speech timestamps.",
+        "note": (
+            "Customer turns are used only as timing anchors. Response time and interruption "
+            "metrics describe the agent's behavior and are estimated from diarized timestamps."
+        ),
     }
 
 
@@ -302,7 +311,7 @@ def calculate_voice_metrics(
     segments: list[Segment],
     agent_speaker: str,
 ) -> dict[str, Any]:
-    """Calculate a few understandable acoustic features for the agent voice."""
+    """Calculate a small set of acoustic features for the agent voice only."""
     y, sample_rate = librosa.load(wav_path, sr=None, mono=True)
     if y.size == 0:
         raise ValueError("The decoded audio is empty.")
@@ -314,7 +323,8 @@ def calculate_voice_metrics(
             "pitch_variation_semitones": None,
             "loudness_variation_db": None,
             "voice_modulation": "not available",
-            "clipping_ratio": round(float(np.mean(np.abs(y) >= 0.999)), 5),
+            "clipping_ratio": None,
+            "agent_audio_seconds": 0.0,
             "note": "No usable agent speech segments were available for acoustic analysis.",
         }
 
@@ -344,7 +354,6 @@ def calculate_voice_metrics(
         rms = librosa.feature.rms(y=audio)[0]
         if rms.size:
             rms_db = librosa.amplitude_to_db(rms, ref=1.0)
-            # Ignore near-silent frames inside a diarized segment.
             active = rms_db[rms_db > -55]
             rms_db_values.extend(float(value) for value in active)
 
@@ -368,6 +377,8 @@ def calculate_voice_metrics(
     else:
         modulation = "balanced"
 
+    agent_audio = np.concatenate(agent_arrays)
+
     return {
         "speech_rate_wpm": round(speech_rate, 1) if speech_rate is not None else None,
         "pitch_variation_semitones": (
@@ -377,10 +388,11 @@ def calculate_voice_metrics(
             round(loudness_variation, 2) if loudness_variation is not None else None
         ),
         "voice_modulation": modulation,
-        "clipping_ratio": round(float(np.mean(np.abs(y) >= 0.999)), 5),
+        "clipping_ratio": round(float(np.mean(np.abs(agent_audio) >= 0.999)), 5),
+        "agent_audio_seconds": round(agent_duration, 2),
         "note": (
-            "Voice modulation is a simple heuristic based on pitch and loudness variation. "
-            "It is not an emotion or personality classifier."
+            "These measurements cover segments attributed to the agent. The modulation label is a "
+            "simple pitch-and-loudness heuristic, not an emotion or personality classifier."
         ),
     }
 
@@ -392,6 +404,11 @@ def build_report(
     voice_metrics: dict[str, Any],
 ) -> dict[str, Any]:
     return {
+        "schema_version": "0.1",
+        "scope": {
+            "evaluated_party": "agent",
+            "customer_role": "context_and_timing_reference",
+        },
         "assessment": transcript_eval.overall_assessment,
         "summary": transcript_eval.summary,
         "detected_agent_speaker": transcript_eval.agent_speaker,
@@ -400,11 +417,13 @@ def build_report(
             "score": transcript_eval.task_completion_score,
             "reason": transcript_eval.task_completion_reason,
         },
-        "conversation": {
+        "agent_response": {
+            "alignment_score": transcript_eval.response_alignment_score,
             "coherence_score": transcript_eval.coherence_score,
             "relevance_score": transcript_eval.relevance_score,
             "context_retention_score": transcript_eval.context_retention_score,
             "repetition_score": transcript_eval.repetition_score,
+            "turn_reviews": [review.model_dump() for review in transcript_eval.response_reviews],
         },
         "facts": {
             "coverage_score": transcript_eval.required_fact_coverage_score,
@@ -415,5 +434,113 @@ def build_report(
         "interaction": interaction_metrics,
         "voice": voice_metrics,
         "issues": [issue.model_dump() for issue in transcript_eval.issues],
-        "transcript": [asdict(segment) for segment in segments],
+        "transcript": [
+            {
+                **asdict(segment),
+                "role": (
+                    "agent"
+                    if segment.speaker == transcript_eval.agent_speaker
+                    else "customer"
+                ),
+            }
+            for segment in segments
+        ],
     }
+
+
+class VoiceAgentEvaluator:
+    """Reusable evaluator for recorded customer-agent calls."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        env_file: str | Path | None = ".env.local",
+        config: EvaluationConfig | None = None,
+    ) -> None:
+        self.api_key = api_key
+        self.env_file = env_file
+        self.config = config or EvaluationConfig()
+
+    def evaluate(
+        self,
+        audio_path: str | Path,
+        *,
+        task: str = "",
+        reference_facts: str | Sequence[str] | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Run the full post-call evaluation for the agent in one recording."""
+        path = Path(audio_path)
+        resolved_key = resolve_api_key(api_key=self.api_key, env_file=self.env_file)
+
+        _notify(progress, "Separating speakers and generating the transcript...")
+        segments = transcribe_with_speakers(
+            path,
+            api_key=resolved_key,
+            model=self.config.transcription_model,
+        )
+
+        _notify(progress, "Reviewing how the agent responded to the customer...")
+        transcript_eval = evaluate_transcript(
+            segments=segments,
+            api_key=resolved_key,
+            task=task,
+            reference_facts=reference_facts,
+            model=self.config.evaluation_model,
+        )
+
+        _notify(progress, "Calculating response-time and agent voice metrics...")
+        interaction = calculate_interaction_metrics(
+            segments=segments,
+            agent_speaker=transcript_eval.agent_speaker,
+            long_pause_seconds=self.config.long_pause_seconds,
+            minimum_overlap_seconds=self.config.minimum_overlap_seconds,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wav_path = Path(temp_dir) / "analysis.wav"
+            convert_to_analysis_wav(path, wav_path)
+            voice = calculate_voice_metrics(
+                wav_path=wav_path,
+                segments=segments,
+                agent_speaker=transcript_eval.agent_speaker,
+            )
+
+        report = build_report(
+            segments=segments,
+            transcript_eval=transcript_eval,
+            interaction_metrics=interaction,
+            voice_metrics=voice,
+        )
+        report["metadata"] = {
+            "transcription_model": self.config.transcription_model,
+            "evaluation_model": self.config.evaluation_model,
+            "long_pause_seconds": self.config.long_pause_seconds,
+            "minimum_overlap_seconds": self.config.minimum_overlap_seconds,
+        }
+        return report
+
+
+def evaluate_call(
+    audio_path: str | Path,
+    *,
+    task: str = "",
+    reference_facts: str | Sequence[str] | None = None,
+    api_key: str | None = None,
+    env_file: str | Path | None = ".env.local",
+    config: EvaluationConfig | None = None,
+    progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Convenience function for evaluating one recorded voice-agent call."""
+    evaluator = VoiceAgentEvaluator(
+        api_key=api_key,
+        env_file=env_file,
+        config=config,
+    )
+    return evaluator.evaluate(
+        audio_path,
+        task=task,
+        reference_facts=reference_facts,
+        progress=progress,
+    )
