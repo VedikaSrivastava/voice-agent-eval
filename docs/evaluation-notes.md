@@ -1,100 +1,133 @@
 # Evaluation Notes
 
-## Why combine audio and text?
+## Scope
 
-A transcript can look correct even when the call feels poor. The agent may speak over the customer, pause for several seconds, or deliver a response in a flat and difficult-to-follow way. Audio alone has the opposite problem: a call can sound smooth while the agent repeats a question, forgets an earlier answer, or gives unsupported information.
+This project evaluates the **voice agent**, not the customer.
 
-This prototype keeps the two views separate and combines them only in the final report.
+Customer speech is still necessary because it establishes what the agent needed to answer, which details were already supplied, when the customer finished speaking, and whether the agent cut into a turn. None of the scores should judge the customer's accent, fluency, tone, emotion, or willingness to cooperate.
 
-## Metric groups
+The first version accepts a completed recording rather than live system traces. That makes it useful for post-call review while keeping the input simple.
 
-### 1. Response time
+## 1. Customer request to agent response
 
-For each customer-to-agent turn, the app measures:
+The most direct evaluation is a turn-level comparison:
+
+```text
+customer question, request, correction, or concern
+                    ↓
+next relevant agent response
+```
+
+For each substantive customer turn, the transcript evaluator records:
+
+- what the customer asked, provided, or corrected
+- what the agent said in response
+- whether the response answered, partially answered, missed, clarified, or did not require an answer
+- a one-to-five agent-response score
+- a short explanation and the relevant timestamps
+
+Greetings and acknowledgements are skipped unless they reveal a failure. The timestamps are taken from the speaker-attributed transcript so a reviewer can return to the relevant point in the recording.
+
+This turn-level view is important because an overall score can be imperfect. A reviewer should still be able to see the exact customer context and agent response that produced a flag.
+
+## 2. Task completion
+
+Task completion measures whether the agent achieved or meaningfully advanced the call goal supplied by the reviewer. It is not a score for whether the customer cooperated.
+
+When a goal cannot be completed because the customer declines to continue or the call ends early, the evaluator should describe that context and judge whether the agent handled the situation appropriately.
+
+A production version should replace the free-text goal with a call-type rubric containing required fields, actions, outcomes, and escalation rules.
+
+## 3. Agent response quality
+
+These scores apply only to the agent:
+
+- **Response alignment:** did the agent address the customer's actual question, request, or correction?
+- **Coherence:** did the response follow logically from the prior turn?
+- **Relevance:** did the agent stay on the request instead of drifting into unrelated information?
+- **Context retention:** did the agent reuse details and corrections already supplied by the customer?
+- **Repetition:** did the agent avoid asking the same question or repeating the same explanation unnecessarily?
+
+These are model-based judgments. The timestamped evidence and turn reviews remain visible so the scores can be audited.
+
+## 4. Facts and required points
+
+Reference facts are optional. When they are supplied, the evaluator checks whether the agent covered them and whether any agent statement conflicts with them.
+
+When no source of truth is supplied, factuality is marked `not_checked`. The evaluation model is not asked to guess whether a domain-specific statement is true.
+
+A stronger version can retrieve supporting passages from approved documents, product data, tool results, or call-specific backend records, then attach the supporting source to each evaluated claim.
+
+## 5. Agent response time
+
+For each customer-to-agent turn:
 
 ```text
 response gap = agent speech start - customer speech end
 ```
 
-It reports the median, P95, and maximum positive gap.
+The report includes the median, P95, and maximum positive gap. The median describes the typical experience, while P95 makes occasional slow responses visible.
 
-The median describes the normal experience across the call. P95 makes occasional slow responses visible instead of hiding them inside an average. A negative gap means the agent began speaking before the customer segment ended and is handled as a possible interruption.
+This is the delay heard in the recording. It cannot separate ASR, model, tool-call, speech-generation, buffering, or network time. The practical next step is to join the audio report with runtime event timestamps for a full latency breakdown.
 
-This is perceived latency from the recording. It does not explain whether the delay came from transcription, model inference, a tool call, speech generation, or network buffering. That breakdown requires system traces.
+## 6. Long pauses and interruptions
 
-### 2. Long pauses
+A positive response gap above the configured threshold is reported as a long pause.
 
-A customer-to-agent response gap above the configured threshold is marked as a long pause and added to the timestamped issue list.
-
-The current default is two seconds. It is intentionally configurable because an acceptable pause depends on the call. A longer delay may be reasonable while the agent is checking information, but awkward during a simple conversational reply.
-
-### 3. Turn-taking and interruptions
-
-When an agent segment begins before the previous customer segment ends, the overlap is recorded as a possible agent interruption.
+When the agent begins before the customer segment ends:
 
 ```text
 overlap = customer speech end - agent speech start
 ```
 
-Very small overlaps are ignored. The current implementation reports the count, duration, and timestamp of the remaining overlaps.
+The overlap is marked as a possible agent interruption. This is intentionally cautious because a short acknowledgement may be natural. A stronger classifier should inspect the surrounding exchange and distinguish backchannels from disruptive cutoffs.
 
-This is an estimate. Speaker diarization is imperfect, and not every overlap is disruptive. A brief acknowledgement can be natural. A stronger version of the evaluator would classify the surrounding exchange and distinguish acknowledgements from cases where the agent actually cuts the customer off.
+Speaker diarization is another source of error. Dual-channel recordings, an explicit agent-speaker label, or a quick manual speaker correction would make these metrics more reliable.
 
-### 4. Speech rate
+## 7. Agent voice delivery
 
-Agent speech rate is calculated as:
+Acoustic features are extracted from segments attributed to the agent. Customer-only portions of the recording are excluded from the reported voice metrics.
+
+### Speech rate
 
 ```text
 speech rate = agent transcript words / agent active speech time
 ```
 
-The result is reported in words per minute. This is useful for spotting delivery that is unusually rushed or slow, but it should not be treated as a universal pass or fail rule. Speaking rate should eventually be compared with a baseline for the selected synthetic voice and the type of call.
+The result is reported in words per minute. It can surface unusually rushed or slow delivery, but should eventually be compared with a baseline for the selected voice and call type.
 
-### 5. Pitch variation
+### Pitch variation
 
-The app estimates the fundamental frequency of voiced agent frames and expresses pitch movement relative to the agent's median pitch. The reported value is the standard deviation of that movement in semitones.
+The evaluator estimates F0 on voiced agent frames and measures movement relative to the agent's median pitch. This avoids comparing absolute pitch between different voices.
 
-This avoids comparing absolute pitch across different voices. A very low value can be a sign of flat delivery, while a very high value can indicate unstable or exaggerated output. The current labels are heuristics and need calibration before they can support production thresholds.
+### Loudness variation and clipping
 
-### 6. Loudness variation and clipping
+The evaluator measures loudness variation across active agent frames and reports the share of agent samples near digital clipping.
 
-Loudness variation is calculated over active agent frames in decibels. The app also reports the fraction of samples that are close to digital clipping.
+The current modulation label is a simple heuristic over pitch and loudness variation. It is not an emotion, personality, or customer-sentiment classifier. A production version should calibrate it against human-rated examples for each agent voice or replace it with a validated perceptual speech-quality model.
 
-These signals can surface inconsistent volume, abrupt level changes, or distorted audio. They are basic quality indicators rather than a full perceptual speech-quality score.
+## 8. Report shape and reuse
 
-### 7. Task completion
+The Streamlit app, Python package, and command-line interface all run the same evaluator and return the same JSON structure. This keeps the UI thin and allows the evaluation logic to be reused in another application, a batch job, or a test suite.
 
-The transcript evaluator compares the conversation with the call goal supplied by the reviewer. It scores whether the goal was completed and gives a short reason.
+The report contains a `schema_version` and model/threshold metadata so later versions can be compared without silently changing the meaning of an existing result. A synthetic example is available in [example-report.json](example-report.json).
 
-A production version should define task-specific rubrics instead of relying on a free-text goal. For example, a rubric can list required fields, required actions, acceptable outcomes, and escalation conditions.
+## Why the report keeps component metrics separate
 
-### 8. Coherence, relevance, context, and repetition
+A single score can hide important differences. A slow but factually correct call is not the same problem as a smooth call that gives an unsupported answer.
 
-The transcript evaluator scores four conversational qualities from one to five:
+The prototype therefore returns a pass, review, or fail assessment while keeping task, response, timing, voice, and factuality signals separate. Use-case-specific weighting and hard-failure rules should be added only after reviewing real calls.
 
-- **Coherence:** each response follows logically from the prior turn
-- **Relevance:** the agent addresses the customer's actual request
-- **Context retention:** earlier answers and corrections are used correctly
-- **Repetition:** the agent avoids repeated questions, explanations, or loops
+## Validation plan
 
-These are model-based judgments, so the report includes transcript evidence and should be reviewed rather than treated as ground truth.
+The next meaningful step is a small human-reviewed call set. Reviewers should label:
 
-### 9. Facts and required points
+- whether each agent response answered the corresponding customer turn
+- task success
+- missing or incorrect facts
+- repeated questions or lost context
+- slow responses and disruptive interruptions
+- voice-delivery problems
+- overall acceptability
 
-Reference facts are optional. When they are supplied, the evaluator checks whether the agent covered them and whether any statement conflicts with them.
-
-When they are not supplied, factuality is marked as `not_checked`. The app does not ask the evaluation model to guess whether domain-specific claims are true.
-
-For a production workflow, the source of truth could come from approved policy documents, product data, a knowledge base, or call-specific backend records.
-
-## Why there is no opaque overall score
-
-The app returns a simple pass, review, or fail assessment, but keeps the component metrics visible. A single number can hide the difference between a slow but correct call and a smooth call containing a serious factual error.
-
-Before adding a weighted score, the metric weights and hard-failure rules should be defined by the use case. A compliance failure or unsupported promise may need to override otherwise strong voice and conversation scores.
-
-## How the evaluator should be validated
-
-The next step after the prototype is a small human-reviewed dataset. Reviewers should label task success, factual issues, interruptions, slow responses, repetition, and overall acceptability. Those labels can be used to measure precision, recall, false-positive rate, timestamp accuracy, and agreement with human scores.
-
-That process is also how latency, pause, pitch, and loudness thresholds should be calibrated. The current values are useful for a demo, but they are not universal production standards.
+The evaluator can then be measured using issue precision and recall, timestamp accuracy, score agreement, and false-positive rate. Thresholds should be tuned by call type and agent voice rather than treated as universal values.

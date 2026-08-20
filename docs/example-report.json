@@ -1,0 +1,107 @@
+{
+  "schema_version": "0.1",
+  "scope": {
+    "evaluated_party": "agent",
+    "customer_role": "context_and_timing_reference"
+  },
+  "assessment": "review",
+  "summary": "The agent answered the main question but repeated one request and had one slow response.",
+  "detected_agent_speaker": "speaker_1",
+  "agent_speaker_confidence": 0.97,
+  "task": {
+    "score": 82,
+    "reason": "The request was addressed, but the next step was not confirmed clearly."
+  },
+  "agent_response": {
+    "alignment_score": 4,
+    "coherence_score": 5,
+    "relevance_score": 4,
+    "context_retention_score": 3,
+    "repetition_score": 4,
+    "turn_reviews": [
+      {
+        "customer_timestamp_seconds": 18.4,
+        "agent_timestamp_seconds": 19.1,
+        "customer_request": "The customer asked when the application review would be completed.",
+        "agent_response": "The agent said the review usually takes two business days.",
+        "outcome": "answered",
+        "score": 5,
+        "note": "The response directly answered the question and matched the supplied reference fact."
+      },
+      {
+        "customer_timestamp_seconds": 46.2,
+        "agent_timestamp_seconds": 49.4,
+        "customer_request": "The customer provided their preferred callback time.",
+        "agent_response": "The agent asked for the callback time again.",
+        "outcome": "not_answered",
+        "score": 2,
+        "note": "The agent did not retain information that had already been provided."
+      }
+    ]
+  },
+  "facts": {
+    "coverage_score": 100,
+    "status": "supported",
+    "note": "The supplied reference fact was stated correctly.",
+    "missing_or_incorrect": []
+  },
+  "interaction": {
+    "response_count": 5,
+    "median_response_seconds": 0.74,
+    "p95_response_seconds": 2.71,
+    "max_response_seconds": 3.2,
+    "long_pause_count": 1,
+    "long_pauses": [
+      {
+        "timestamp_seconds": 49.4,
+        "gap_seconds": 3.2
+      }
+    ],
+    "agent_interruption_count": 0,
+    "agent_interruptions": [],
+    "agent_turn_count": 6,
+    "customer_turn_count": 6,
+    "agent_speech_share": 0.49,
+    "note": "Customer turns are used only as timing anchors. Response time and interruption metrics describe the agent's behavior and are estimated from diarized timestamps."
+  },
+  "voice": {
+    "speech_rate_wpm": 151.4,
+    "pitch_variation_semitones": 2.31,
+    "loudness_variation_db": 4.12,
+    "voice_modulation": "balanced",
+    "clipping_ratio": 0.00003,
+    "agent_audio_seconds": 31.7,
+    "note": "These measurements cover segments attributed to the agent. The modulation label is a simple pitch-and-loudness heuristic, not an emotion or personality classifier."
+  },
+  "issues": [
+    {
+      "category": "context",
+      "severity": "medium",
+      "timestamp_seconds": 49.4,
+      "evidence": "The customer provided a callback time, and the agent requested it again.",
+      "explanation": "The agent did not retain a detail supplied in the preceding customer turn."
+    }
+  ],
+  "transcript": [
+    {
+      "speaker": "speaker_0",
+      "start": 18.4,
+      "end": 18.9,
+      "text": "How long will the application review take?",
+      "role": "customer"
+    },
+    {
+      "speaker": "speaker_1",
+      "start": 19.1,
+      "end": 21.3,
+      "text": "The review usually takes two business days.",
+      "role": "agent"
+    }
+  ],
+  "metadata": {
+    "transcription_model": "gpt-4o-transcribe-diarize",
+    "evaluation_model": "gpt-5-mini",
+    "long_pause_seconds": 2.0,
+    "minimum_overlap_seconds": 0.15
+  }
+}

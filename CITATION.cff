@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+title: Voice Agent Eval
+message: If you use this software in your work, please cite it using the metadata in this file.
+type: software
+authors:
+  - family-names: Srivastava
+    given-names: Vedika
+abstract: A post-call evaluation toolkit for voice agents using audio, timing, transcript, and grounded response-quality signals.
+repository-code: https://github.com/VedikaSrivastava/voice-agent-eval
+url: https://github.com/VedikaSrivastava/voice-agent-eval
+version: 0.1.0
+date-released: 2026-08-20
+license: MIT
+keywords:
+  - voice agents
+  - LLM evaluation
+  - conversational AI
+  - speech analytics
+  - call-center quality assurance

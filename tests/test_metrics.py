@@ -1,4 +1,4 @@
-from voice_eval import Segment, calculate_interaction_metrics, merge_adjacent_segments
+from voice_agent_eval import Segment, calculate_interaction_metrics, merge_adjacent_segments
 
 
 def test_merges_adjacent_same_speaker_fragments() -> None:
@@ -31,3 +31,4 @@ def test_response_gap_and_interruption_metrics() -> None:
     assert metrics["p95_response_seconds"] == 2.42
     assert metrics["agent_interruption_count"] == 1
     assert metrics["long_pause_count"] == 1
+    assert "Customer turns are used only as timing anchors" in metrics["note"]

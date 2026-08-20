@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-agent-eval"
+version = "0.1.0"
+description = "Post-call evaluation for voice agents using audio and transcript signals."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Vedika Srivastava" }
+]
+keywords = [
+  "voice-agent",
+  "llm-evaluation",
+  "conversational-ai",
+  "speech-analytics",
+  "call-center",
+  "quality-assurance",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+  "openai>=1.93.0",
+  "pydantic>=2.7,<3",
+  "numpy>=2.0,<3",
+  "librosa>=0.11,<1",
+  "pydub>=0.25,<1",
+  "soundfile>=0.13,<1",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+app = ["streamlit>=1.49,<2"]
+dev = ["pytest>=8,<10", "build>=1.2,<2"]
+
+[project.scripts]
+voice-agent-eval = "voice_agent_eval.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/VedikaSrivastava/voice-agent-eval"
+Repository = "https://github.com/VedikaSrivastava/voice-agent-eval"
+Documentation = "https://github.com/VedikaSrivastava/voice-agent-eval#readme"
+Issues = "https://github.com/VedikaSrivastava/voice-agent-eval/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+voice_agent_eval = ["py.typed"]
