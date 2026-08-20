@@ -14,7 +14,7 @@ The repository includes:
 - an installable Python package for using the evaluator in another project
 - a command-line interface that writes the same report to JSON
 
-The package is installable from source today. It is not published to PyPI yet.
+Install the package from PyPI:\n\n```bash\npip install voice-agent-eval\n```
 
 ## Why evaluate both audio and text?
 
